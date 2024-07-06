@@ -1,0 +1,37 @@
+<div class="container">
+    <form [formGroup]="formulario" (ngSubmit)="registrar()">
+        @if(errors.length){
+        <div class="alert alert-danger">
+            <ul>
+                @for(item of errors; track item){
+                <li>{{item}}</li>
+                }
+            </ul>
+        </div>
+        }
+        <div>
+            <label class="form-label">Placa</label>
+            <input type="text" class="form-control" formControlName="placa" />
+        </div>
+        <div>
+            <label class="form-label">Marca</label>
+            <input type="text" class="form-control" formControlName="marca" />
+        </div>
+        <div>
+            <label class="form-label">Modelo</label>
+            <input type="text" class="form-control" formControlName="modelo" />
+        </div>
+        <div>
+            <label class="form-label">Año</label>
+            <input type="text" class="form-control" formControlName="anio" />
+        </div>
+        <div>
+            <label class="form-label">Color</label>
+            <input type="text" class="form-control" formControlName="color" />
+        </div>
+        <div>
+            <label class="form-label">Cliente</label>
+            <input type="text" class="form-control" formControlName="cliente" />
+        </div>
+    </form>
+</div>
