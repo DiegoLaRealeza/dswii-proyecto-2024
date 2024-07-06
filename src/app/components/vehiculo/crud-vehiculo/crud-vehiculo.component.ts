@@ -1,7 +1,7 @@
 import { Component, ElementRef } from '@angular/core';
 import { RouterModule } from '@angular/router';
-import { Cliente } from '../../models/cliente';
-import { Vehiculo } from '../../models/vehiculo';
+import { Cliente } from '../../../models/cliente';
+import { Vehiculo } from '../../../models/vehiculo';
 
 @Component({
   selector: 'app-crud-vehiculo',

@@ -1,6 +1,6 @@
 import { Component, ElementRef } from '@angular/core';
 import { FormBuilder, FormGroup, ReactiveFormsModule } from '@angular/forms';
-import { VehiculoService } from '../../services/vehiculo.service';
+import { VehiculoService } from '../../../services/vehiculo.service';
 
 @Component({
   selector: 'app-crud-registrar-vehiculo',
