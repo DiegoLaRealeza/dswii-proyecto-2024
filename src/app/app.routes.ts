@@ -21,7 +21,7 @@ export const routes: Routes = [
     // Cliente
     {path: 'verCrudCliente', component:CrudClienteComponent},
     {path: 'verCrudRegistrarCliente', component:CrudRegistrarClienteComponent},
-    {path: 'verCrudActualizarCliente', component:CrudActualizarClienteComponent},
+    {path: 'verCrudActualizarCliente/:codigo', component:CrudActualizarClienteComponent},
 
     // HistorialServicio
     {path: 'verCrudHistorialServicio', component:CrudHistorialServicioComponent},

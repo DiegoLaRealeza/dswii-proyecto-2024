@@ -1,1 +1,42 @@
-<p>crud-actualizar-cliente works!</p>
+<h1 class="text-center">Agregar un Nuevo Programador</h1>
+<div class="container">
+    <form [formGroup]="formulario" (ngSubmit)="update()">
+        @if(errors.length){
+        <div class="alert alert-danger">
+            <ul>
+                @for(item of errors; track item){
+                <li>{{item}}</li>
+                }
+            </ul>
+
+        </div>
+        }
+        <div class="mb-3">
+            <label for="exampleInputEmail1" class="form-label">Nombres</label>
+            <input type="text" class="form-control" formControlName="nombre">
+        </div>
+        <div class="mb-3">
+            <label for="exampleInputEmail1" class="form-label">Apellidos</label>
+            <input type="text" class="form-control" formControlName="apellido">
+        </div>
+        <div class="mb-3">
+            <label for="exampleInputEmail1" class="form-label">Nro. DNI</label>
+            <input type="text" class="form-control" formControlName="dni">
+        </div>
+        <div class="mb-3">
+            <label for="exampleInputEmail1" class="form-label">Dirección</label>
+            <input type="text" class="form-control" formControlName="direccion">
+        </div>
+        <div class="mb-3">
+            <label for="exampleInputEmail1" class="form-label">Celular</label>
+            <input type="text" class="form-control" formControlName="telefono">
+        </div>
+        <div class="mb-3">
+            <label for="exampleInputEmail1" class="form-label">Correo</label>
+            <input type="text" class="form-control" formControlName="correo">
+        </div>
+        <button type="submit" class="btn btn-primary">Grabar</button>
+        <button class="btn btn-danger" routerLink="/verCrudCliente">Regresar</button>
+    </form>
+
+</div>
