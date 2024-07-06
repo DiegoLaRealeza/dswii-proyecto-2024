@@ -26,15 +26,15 @@ export const routes: Routes = [
     // HistorialServicio
     {path: 'verCrudHistorialServicio', component:CrudHistorialServicioComponent},
     {path: 'verCrudRegistrarHistorialServicio', component:CrudRegistrarHistorialServicioComponent},
-    {path: 'verCrudActualizarHistorialServicio', component:CrudActualizarHistorialServicioComponent},
+    {path: 'verCrudActualizarHistorialServicio/:codigo', component:CrudActualizarHistorialServicioComponent},
 
     // Servicio
     {path: 'verCrudServicio', component:CrudServicioComponent},
     {path: 'verCrudRegistrarServicio', component:CrudRegistrarServicioComponent},
-    {path: 'verCrudActualizarServicio', component:CrudActualizarServicioComponent},
+    {path: 'verCrudActualizarServicio/:codigo', component:CrudActualizarServicioComponent},
 
     // Vehículo
     {path: 'verCrudVehiculo', component:CrudVehiculoComponent},
     {path: 'verCrudRegistrarVehiculo', component:CrudRegistrarVehiculoComponent},
-    {path: 'verCrudActualizarVehiculo', component:CrudActualizarVehiculoComponent}
+    {path: 'verCrudActualizarVehiculo/:codigo', component:CrudActualizarVehiculoComponent}
 ];
