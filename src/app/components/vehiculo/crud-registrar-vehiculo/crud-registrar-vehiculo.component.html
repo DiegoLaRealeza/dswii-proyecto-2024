@@ -1,3 +1,4 @@
+<h1 class="text-center">Registrar Nuevo Vehículo</h1>
 <div class="container">
     <form [formGroup]="formulario" (ngSubmit)="registrar()">
         @if(errors.length){
@@ -33,5 +34,7 @@
             <label class="form-label">Cliente</label>
             <input type="text" class="form-control" formControlName="cliente" />
         </div>
+        <button type="submit" class="btn btn-success">Registrar</button>
     </form>
+    <button class="btn btn-danger" routerLink="/verCrudVehiculo">Volver</button>
 </div>

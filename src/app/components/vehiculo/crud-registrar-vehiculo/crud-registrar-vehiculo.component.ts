@@ -1,6 +1,8 @@
 import { Component, ElementRef } from '@angular/core';
 import { FormBuilder, FormGroup, ReactiveFormsModule } from '@angular/forms';
 import { VehiculoService } from '../../../services/vehiculo.service';
+import { Router } from '@angular/router';
+import Swal from 'sweetalert2';
 
 @Component({
   selector: 'app-crud-registrar-vehiculo',
@@ -14,7 +16,8 @@ export class CrudRegistrarVehiculoComponent {
   constructor(
     private elementRef: ElementRef,
     private formBuilder: FormBuilder,
-    private vehiculoService: VehiculoService
+    private servicio: VehiculoService,
+    private router: Router
   ) { }
 
   formulario: FormGroup = new FormGroup({})
@@ -22,7 +25,7 @@ export class CrudRegistrarVehiculoComponent {
 
   ngAfterViewInit() {
     this.elementRef.nativeElement.ownerDocument
-    .body.style.backgroundColor = 'darkkhaki';
+      .body.style.backgroundColor = 'darkkhaki';
   }
 
   ngOnInit() {
@@ -32,12 +35,33 @@ export class CrudRegistrarVehiculoComponent {
       modelo: [],
       anio: [],
       color: [],
-      idCliente: []
+      cliente: []
     })
   }
 
   registrar() {
-    
+    let vehiculo = this.formulario.value;
+    this.servicio.registrar(vehiculo).subscribe({
+      next: (data) => {
+        this.router.navigate(['/verCrudVehiculo']);
+        this.alertaRegistro();
+        console.log(data);
+      },
+      error: (response) => {
+        console.log('Error: ' + response.error);
+        this.errors = response.error;
+
+      }
+    });
+  }
+
+  alertaRegistro() {
+    Swal.fire({
+      title: 'Éxito',
+      text: 'Vehículo registrado correctamente',
+      icon: 'success',
+      confirmButtonText: 'OK'
+    })
   }
 
 }
