@@ -33,6 +33,7 @@ export class CrudRegistrarClienteComponent {
 
   create() {
     let prog = this.formulario.value
+    console.log(prog)
     this.servicioCli.save(prog).subscribe({
       next: (data) => {
         this.router.navigate(['/verCrudCliente'])
@@ -42,6 +43,7 @@ export class CrudRegistrarClienteComponent {
       error: response => {
         console.log("xxxx : " + response.error)
         this.errors = response.error
+        console.log(prog)
       }
     })
   }

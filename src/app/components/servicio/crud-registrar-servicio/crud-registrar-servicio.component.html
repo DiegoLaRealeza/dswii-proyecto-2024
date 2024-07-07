@@ -1,1 +1,36 @@
-<p>crud-registrar-servicio works!</p>
+<h1 class="text-center">Agregar un Nuevo Servicio</h1>
+<div class="container">
+    <form [formGroup]="formulario" (ngSubmit)="create()">
+        @if(errors.length){
+        <div class="alert alert-danger">
+            <ul>
+                @for(item of errors; track item){
+                <li>{{item}}</li>
+                }
+            </ul>
+
+        </div>
+        }
+
+        <div class="mb-3">
+            <label for="exampleInputEmail1" class="form-label">Descripción del Servicio</label>
+            <input type="text" class="form-control" formControlName="descripcion">
+        </div>
+        <div class="mb-3">
+            <label for="exampleInputEmail1" class="form-label">Precio del Servicio</label>
+            <input type="text" class="form-control" formControlName="costo">
+        </div>
+        <div class="mb-3">
+            <label for="idVehiculo" class="form-label">Seleccionar vehiculo</label>
+            <select id="idVehiculo" class="form-control" formControlName="idVehiculo">
+                <option value="0"> [Seleccione] </option>
+                <option *ngFor="let vehiculo of lstVehiculos" [value]="vehiculo.idVehiculo">
+                    {{vehiculo.marca}} - {{vehiculo.modelo}}
+                </option>
+            </select>
+        </div>
+
+        <button class="btn btn-primary">Grabar</button>
+        <button class="btn btn-danger" routerLink="/verCrudServicio">Regresar</button>
+    </form>
+</div>
