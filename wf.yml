@@ -1,0 +1,134 @@
+name: Testing multi-repo (MOCK DEMO)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.build.outputs.matrix }}
+    steps:
+      - name: Checkout (para leer config.yml)
+        uses: actions/checkout@v4
+      - name: Install yq v4.x
+        run: |
+          sudo wget https://github.com/mikefarah/yq/releases/download/v4.43.1/yq_linux_amd64 -O /usr/bin/yq
+          sudo chmod +x /usr/bin/yq
+      # PASO EXTRA: Crear delivery.yml dummy por si no existe en el repo para la demo
+      - name: Crear delivery.yml dummy (Solo para Demo)
+        run: |
+          cat <<EOF > delivery.yml
+          testing:
+            - repo: org/repo-demo-1
+              tags: "@login"
+              navegar: chrome
+              karate: true
+            - repo: org/repo-demo-2
+              tags: "@payment"
+              navegar: firefox
+              karate: false
+          EOF
+
+      - id: build
+        name: Build matrix and Mock Repos
+        env:
+          GH_TOKEN: "MOCK_TOKEN" # No necesitamos token real
+        run: |
+          CONFIG_FILE="delivery.yml"
+
+          # 1. Generar el JSON de la matriz
+          # CORRECCIÓN: Agregamos comillas a las claves ("repo", "ref", etc.)
+          matrix_json="$(yq -o=json '
+            .testing
+            | map({
+                "repo": .repo,
+                "ref": (.ref // "main"),
+                "tags": .tags,
+                "navegar": .navegar,
+                "karate": (.karate // false),
+                "slug": (.repo | split("/") | .[1])
+              })
+          ' "$CONFIG_FILE")"
+
+          # 2. Exportar matriz al output
+          {
+            echo "matrix<<EOF"
+            echo "$matrix_json"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          # 3. MOCK: Simular clonado de repositorios
+          mkdir -p repos_downloaded
+
+          echo "$matrix_json" | jq -c '.[]' | while read -r item; do
+            REPO=$(echo "$item" | jq -r '.repo')
+            REF=$(echo "$item" | jq -r '.ref')
+            SLUG=$(echo "$item" | jq -r '.slug')
+            
+            echo "--- [MOCK] Simulando git clone de $REPO ---"
+            
+            # En lugar de git clone, creamos la carpeta y un script falso
+            TARGET_DIR="repos_downloaded/$SLUG"
+            mkdir -p "$TARGET_DIR"
+            
+            # Creamos un archivo dummy para verificar que el artifact funciona
+            echo "Este es el código fuente simulado de $REPO" > "$TARGET_DIR/README.md"
+            
+            # Creamos un script ejecutable simulado
+            SCRIPT_PATH="$TARGET_DIR/run_tests.sh"
+            echo '#!/bin/bash' > "$SCRIPT_PATH"
+            echo 'echo "  [MOCK TEST] Ejecutando tests en repo: '$SLUG'"' >> "$SCRIPT_PATH"
+            echo 'echo "  [MOCK TEST] Tags aplicados: $TAGS"' >> "$SCRIPT_PATH"
+            echo 'echo "  [MOCK TEST] Navegador: $NAVEGAR"' >> "$SCRIPT_PATH"
+            chmod +x "$SCRIPT_PATH"
+            
+          done
+
+      - name: Subir repositorios simulados como Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: repos-source
+          path: repos_downloaded
+          retention-days: 1
+
+  run:
+    runs-on: ubuntu-latest
+    needs: plan
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.matrix) }}
+
+    defaults:
+      run:
+        working-directory: repos_downloaded/${{ matrix.slug }}
+
+    steps:
+      - name: Descargar repositorios (Artifact)
+        uses: actions/download-artifact@v4
+        with:
+          name: repos-source
+          path: repos_downloaded
+
+      - name: Ejecutar lógica simulada
+        env:
+          TAGS: ${{ matrix.tags }}
+          NAVEGAR: ${{ matrix.navegar }}
+          KARATE: ${{ matrix.karate }}
+          REPO: ${{ matrix.repo }}
+        run: |
+          echo "=== INICIANDO JOB PARA $REPO ==="
+          echo "Directorio actual: $(pwd)"
+          ls -la 
+
+          # Ejecutamos el script que creamos en el paso anterior
+          if [ -f "./run_tests.sh" ]; then
+            # CORRECCIÓN: Asegurar permisos de ejecución tras descargar el artifact
+            chmod +x ./run_tests.sh
+            ./run_tests.sh
+          else
+            echo "Error: No se encontró el script de tests simulado"
+            exit 1
+          fi
