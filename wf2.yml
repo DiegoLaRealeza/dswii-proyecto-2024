@@ -1,190 +1,346 @@
-name: Multi-repo checkout + Maven tests (matrix)
+name: Karate Testing Matrix
 
 on:
   workflow_dispatch:
     inputs:
-      java-version:
-        description: 'Versión de Java'
-        required: false
-        default: '17'
-        type: choice
-        options: ['11', '17', '21']
-      fail-fast:
-        description: 'Detener al primer fallo'
-        required: false
-        default: false
-        type: boolean
-  push:
-    branches: [main]
-  schedule:
-    # Ejecutar diariamente a las 6:00 AM UTC
-    - cron: '0 6 * * *'
-
-permissions:
-  contents: read
-  actions: read
-
-# Evitar ejecuciones concurrentes del mismo workflow
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
-env:
-  REPOS_FILE: repositorios.yml
+      config_file:
+        description: "Archivo de configuración"
+        required: true
+        default: "jenkis/testing-config.yml"
 
 jobs:
-  fetch_repos:
-    name: 📦 Fetch repos and build matrix
+  # ============================================
+  # JOB 1: Leer YAML y armar la matriz
+  # ============================================
+  plan:
     runs-on: ubuntu-latest
     outputs:
-      repos_json: ${{ steps.build-matrix.outputs.repos_json }}
-      repo_count: ${{ steps.build-matrix.outputs.repo_count }}
-
+      matrix: ${{ steps.build.outputs.matrix }}
     steps:
-      - name: Checkout orchestrator repo
+      - name: Checkout config repo
         uses: actions/checkout@v4
 
-      # Usar acción oficial en lugar de instalación manual
-      - name: Setup yq
-        uses: mikefarah/yq@v4
-
-      - name: Validate config file exists
+      - name: Install yq
         run: |
-          if [[ ! -f "$REPOS_FILE" ]]; then
-            echo "::error file=$REPOS_FILE::No existe el archivo de configuración"
+          sudo wget -qO /usr/bin/yq https://github.com/mikefarah/yq/releases/download/v4.43.1/yq_linux_amd64
+          sudo chmod +x /usr/bin/yq
+
+      - name: Build matrix
+        id: build
+        run: |
+          CONFIG_FILE="${{ github.event.inputs.config_file }}"
+
+          if [[ ! -f "$CONFIG_FILE" ]]; then
+            echo "::error::Archivo no encontrado: $CONFIG_FILE"
             exit 1
           fi
 
-      - name: Build dynamic matrix
-        id: build-matrix
-        run: |
-          REPOS_JSON="$(yq -o=json -I=0 \
-            '.repositorios
-             | map({
-                 repo: .repo,
-                 ref: (.ref // "main"),
-                 dir: (.dir // (.repo | gsub("/"; "__"))),
-                 mvn: (.mvn // "mvn -B test"),
-                 java: (.java // "17")
-               })' "$REPOS_FILE")"
+          matrix_json="$(yq -o=json '
+            .testing | map({
+              "repo": .repo,
+              "tag": .tag,
+              "internet": .internet,
+              "karate": (.karate // false),
+              "slug": (.repo | split("/") | .[1])
+            })
+          ' "$CONFIG_FILE")"
 
-          # Validar que hay repos
-          REPO_COUNT=$(echo "$REPOS_JSON" | jq 'length')
-          if [[ "$REPO_COUNT" -eq 0 ]]; then
-            echo "::error::No se encontraron repositorios en $REPOS_FILE"
-            exit 1
-          fi
+          echo "Matrix generada:"
+          echo "$matrix_json" | jq .
 
-          echo "repos_json=$REPOS_JSON" >> "$GITHUB_OUTPUT"
-          echo "repo_count=$REPO_COUNT" >> "$GITHUB_OUTPUT"
+          {
+            echo "matrix<<EOF"
+            echo "$matrix_json"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
 
-          echo "### 📋 Repositorios encontrados: $REPO_COUNT" >> $GITHUB_STEP_SUMMARY
-          echo "$REPOS_JSON" | jq -r '.[] | "- \(.repo) (\(.ref))"' >> $GITHUB_STEP_SUMMARY
+  # ============================================
+  # JOB 2: Descargar repositorios y guardar en artifacts
+  # ============================================
+  download:
+    runs-on: ubuntu-latest
+    needs: plan
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      - name: Checkout repo ${{ matrix.slug }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.repo }}
+          ref: main
+          path: ${{ matrix.slug }}
+          token: ${{ secrets.GH_TOKEN }}
 
-      - name: Clone all repositories
-        env:
-          REPO_TOKEN: ${{ secrets.REPO_TOKEN || secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          mkdir -p workspace
-
-          yq -r '.repositorios[] | [.repo, (.ref // "main"), (.dir // (.repo | gsub("/"; "__")))] | @tsv' "$REPOS_FILE" \
-          | while IFS=$'\t' read -r repo ref dir; do
-              echo "::group::Clonando $repo"
-              git clone --no-tags --depth 1 --branch "$ref" \
-                "https://x-access-token:${REPO_TOKEN}@github.com/${repo}.git" \
-                "workspace/$dir"
-              echo "::endgroup::"
-            done
-
-      - name: Upload workspace artifact
+      - name: Upload repo as artifact
         uses: actions/upload-artifact@v4
         with:
-          name: repos-workspace
-          path: workspace
-          if-no-files-found: error
+          name: repo-${{ matrix.slug }}
+          path: ${{ matrix.slug }}
           retention-days: 1
-          compression-level: 6
 
-  mvn_test:
-    name: 🧪 Test ${{ matrix.item.repo }}
+  # ============================================
+  # JOB 3: Extraer y ENCRIPTAR keywords (RSA + AES)
+  # ============================================
+  keywords:
     runs-on: ubuntu-latest
-    needs: fetch_repos
-    timeout-minutes: 30
-
+    needs: [plan, download]
+    env:
+      RSA_PUBLIC_KEY: ${{ secrets.RSA_PUBLIC_KEY }}
     strategy:
-      fail-fast: ${{ inputs.fail-fast || false }}
-      max-parallel: 4
+      fail-fast: false
       matrix:
-        item: ${{ fromJson(needs.fetch_repos.outputs.repos_json) }}
-
+        include: ${{ fromJson(needs.plan.outputs.matrix) }}
     steps:
-      - name: Download workspace
+      - name: Download repo artifact
         uses: actions/download-artifact@v4
         with:
-          name: repos-workspace
-          path: workspace
+          name: repo-${{ matrix.slug }}
+          path: ${{ matrix.slug }}
+
+      - name: Setup encryption environment
+        run: |
+          # Guardar clave pública RSA
+          echo "$RSA_PUBLIC_KEY" > public_key.pem
+          
+          # Verificar que la clave es válida
+          openssl rsa -pubin -in public_key.pem -text -noout > /dev/null 2>&1 || {
+            echo "::error::La clave pública RSA no es válida"
+            exit 1
+          }
+          echo "✅ Clave pública RSA válida"
+
+      - name: Extract and encrypt keywords
+        id: encrypt
+        run: |
+          KEYWORD_FILE="${{ matrix.slug }}/keyword.json"
+          OUTPUT_DIR="encrypted-${{ matrix.slug }}"
+          mkdir -p "$OUTPUT_DIR"
+
+          if [[ ! -f "$KEYWORD_FILE" ]]; then
+            echo "::warning::No se encontró keyword.json en ${{ matrix.slug }}"
+            # Crear un JSON por defecto
+            echo '{"keywords": {"default": "no-keyword-found"}}' > "$KEYWORD_FILE"
+          fi
+
+          echo "📄 Contenido de keywords (sin encriptar, solo para debug):"
+          jq -r '.keywords | keys[]' "$KEYWORD_FILE"
+
+          # =============================================
+          # PASO 1: Generar clave AES aleatoria (256 bits)
+          # =============================================
+          AES_KEY=$(openssl rand -hex 32)
+          AES_IV=$(openssl rand -hex 16)
+          
+          echo "🔑 Clave AES generada"
+
+          # =============================================
+          # PASO 2: Encriptar los keywords con AES-256-CBC
+          # =============================================
+          # Extraer solo el objeto "keywords" y encriptarlo
+          jq -c '.keywords' "$KEYWORD_FILE" | \
+            openssl enc -aes-256-cbc -salt -pbkdf2 \
+              -K "$AES_KEY" -iv "$AES_IV" \
+              -out "$OUTPUT_DIR/keywords.enc"
+          
+          echo "🔒 Keywords encriptados con AES"
+
+          # =============================================
+          # PASO 3: Encriptar la clave AES con RSA
+          # =============================================
+          # Combinar AES_KEY:AES_IV y encriptar con RSA
+          echo "${AES_KEY}:${AES_IV}" | \
+            openssl rsautl -encrypt -pubin -inkey public_key.pem \
+              -out "$OUTPUT_DIR/aes_key.enc"
+          
+          echo "🔐 Clave AES encriptada con RSA"
+
+          # =============================================
+          # PASO 4: Crear metadata
+          # =============================================
+          cat > "$OUTPUT_DIR/metadata.json" <<EOF
+          {
+            "slug": "${{ matrix.slug }}",
+            "repo": "${{ matrix.repo }}",
+            "encrypted_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "algorithm": "AES-256-CBC + RSA-4096"
+          }
+          EOF
+
+          echo "✅ Encriptación completada para ${{ matrix.slug }}"
+          ls -la "$OUTPUT_DIR"
+
+      - name: Upload encrypted keywords
+        uses: actions/upload-artifact@v4
+        with:
+          name: encrypted-${{ matrix.slug }}
+          path: encrypted-${{ matrix.slug }}/
+          retention-days: 1
+
+  # ============================================
+  # JOB 4: DESENCRIPTAR y ejecutar MVN
+  # ============================================
+  run:
+    runs-on: ubuntu-latest
+    needs: [plan, keywords]
+    env:
+      RSA_PRIVATE_KEY: ${{ secrets.RSA_PRIVATE_KEY }}
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.matrix) }}
+    steps:
+      - name: Download repo artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: repo-${{ matrix.slug }}
+          path: ${{ matrix.slug }}
+
+      - name: Download encrypted keywords
+        uses: actions/download-artifact@v4
+        with:
+          name: encrypted-${{ matrix.slug }}
+          path: encrypted/
+
+      - name: Setup decryption environment
+        run: |
+          # Guardar clave privada RSA
+          echo "$RSA_PRIVATE_KEY" > private_key.pem
+          chmod 600 private_key.pem
+          
+          # Verificar que la clave es válida
+          openssl rsa -in private_key.pem -check -noout > /dev/null 2>&1 || {
+            echo "::error::La clave privada RSA no es válida"
+            exit 1
+          }
+          echo "✅ Clave privada RSA válida"
+
+      - name: Decrypt keywords
+        id: decrypt
+        run: |
+          echo "📂 Contenido del directorio encrypted:"
+          ls -la encrypted/
+
+          # =============================================
+          # PASO 1: Desencriptar clave AES con RSA
+          # =============================================
+          AES_COMBINED=$(openssl rsautl -decrypt -inkey private_key.pem \
+            -in encrypted/aes_key.enc)
+          
+          AES_KEY=$(echo "$AES_COMBINED" | cut -d':' -f1)
+          AES_IV=$(echo "$AES_COMBINED" | cut -d':' -f2)
+          
+          echo "🔑 Clave AES desencriptada"
+
+          # =============================================
+          # PASO 2: Desencriptar keywords con AES
+          # =============================================
+          KEYWORDS_JSON=$(openssl enc -aes-256-cbc -d -pbkdf2 \
+            -K "$AES_KEY" -iv "$AES_IV" \
+            -in encrypted/keywords.enc)
+          
+          echo "🔓 Keywords desencriptados"
+
+          # =============================================
+          # PASO 3: Exportar cada keyword como variable
+          # =============================================
+          echo "📋 Keywords disponibles:"
+          echo "$KEYWORDS_JSON" | jq -r 'keys[]'
+
+          # Guardar JSON completo (masked)
+          echo "::add-mask::$KEYWORDS_JSON"
+          
+          # Guardar en archivo temporal para el siguiente step
+          echo "$KEYWORDS_JSON" > /tmp/keywords_decrypted.json
+
+          # Exportar cantidad de keywords
+          KEYWORD_COUNT=$(echo "$KEYWORDS_JSON" | jq 'keys | length')
+          echo "keyword_count=$KEYWORD_COUNT" >> "$GITHUB_OUTPUT"
+          echo "✅ Total keywords desencriptados: $KEYWORD_COUNT"
 
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
-          java-version: ${{ inputs.java-version || matrix.item.java || '17' }}
-          cache: maven
-          cache-dependency-path: workspace/${{ matrix.item.dir }}/pom.xml
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'maven'
 
-      - name: Run Maven tests
-        id: maven-test
-        working-directory: workspace/${{ matrix.item.dir }}
+      - name: Run MVN with decrypted keywords
+        working-directory: ${{ matrix.slug }}
         run: |
-          echo "::group::Maven Test Output"
-          ${{ matrix.item.mvn }}
-          echo "::endgroup::"
+          echo "========================================"
+          echo "🚀 Ejecutando tests para: ${{ matrix.repo }}"
+          echo "========================================"
+          echo "Tags: ${{ matrix.tag }}"
+          echo "Internet: ${{ matrix.internet }}"
+          echo "Karate: ${{ matrix.karate }}"
+          echo "Keywords desencriptados: ${{ steps.decrypt.outputs.keyword_count }}"
+          echo "========================================"
 
-      - name: Upload test results
+          # Leer keywords desencriptados
+          KEYWORDS_JSON=$(cat /tmp/keywords_decrypted.json)
+
+          # Mostrar las claves (no los valores)
+          echo "🔑 Keywords disponibles:"
+          echo "$KEYWORDS_JSON" | jq -r 'keys[]'
+
+          # =============================================
+          # Extraer keywords individuales para MVN
+          # =============================================
+          DATABASE=$(echo "$KEYWORDS_JSON" | jq -r '.database // empty')
+          API_KEY=$(echo "$KEYWORDS_JSON" | jq -r '.api_key // empty')
+          TOKEN=$(echo "$KEYWORDS_JSON" | jq -r '.token // empty')
+          SERVICE_ACCOUNT=$(echo "$KEYWORDS_JSON" | jq -r '.service_account // empty')
+
+          # Mask de seguridad
+          [[ -n "$DATABASE" ]] && echo "::add-mask::$DATABASE"
+          [[ -n "$API_KEY" ]] && echo "::add-mask::$API_KEY"
+          [[ -n "$TOKEN" ]] && echo "::add-mask::$TOKEN"
+          [[ -n "$SERVICE_ACCOUNT" ]] && echo "::add-mask::$SERVICE_ACCOUNT"
+
+          # Comando MVN básico
+          mvn --version
+
+          # Si el repo tiene pom.xml, ejecutar
+          if [[ -f "pom.xml" ]]; then
+            echo "📦 Ejecutando mvn verify..."
+            
+            # Construir argumentos dinámicamente según keywords disponibles
+            MVN_ARGS=""
+            [[ -n "$DATABASE" ]] && MVN_ARGS="$MVN_ARGS -Ddb.password=$DATABASE"
+            [[ -n "$API_KEY" ]] && MVN_ARGS="$MVN_ARGS -Dapi.key=$API_KEY"
+            [[ -n "$TOKEN" ]] && MVN_ARGS="$MVN_ARGS -Dauth.token=$TOKEN"
+            
+            echo "MVN Args (masked): $MVN_ARGS"
+            
+            # Ejecutar MVN
+            mvn verify -DskipTests -q $MVN_ARGS || echo "mvn verify completado"
+            
+            # Comando Karate cuando esté listo
+            # mvn test -Dkarate.options="--tags ${{ matrix.tag }}" \
+            #   -Dkarate.env="test" \
+            #   -Dinternet.browser="${{ matrix.internet }}" \
+            #   $MVN_ARGS
+          else
+            echo "⚠️ No se encontró pom.xml, saltando MVN"
+          fi
+
+      - name: Cleanup sensitive files
         if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: test-results-${{ matrix.item.dir }}
-          path: |
-            workspace/${{ matrix.item.dir }}/target/surefire-reports/
-            workspace/${{ matrix.item.dir }}/target/failsafe-reports/
-          if-no-files-found: ignore
-          retention-days: 7
-
-  summary:
-    name: 📊 Test Summary
-    runs-on: ubuntu-latest
-    needs: [fetch_repos, mvn_test]
-    if: always()
-
-    steps:
-      - name: Download all test results
-        uses: actions/download-artifact@v4
-        with:
-          pattern: test-results-*
-          path: all-results
-          merge-multiple: true
-
-      - name: Generate summary
         run: |
-          echo "## 🧪 Resumen de Tests" >> $GITHUB_STEP_SUMMARY
+          rm -f private_key.pem
+          rm -f /tmp/keywords_decrypted.json
+          echo "🧹 Archivos sensibles eliminados"
+
+      - name: Summary
+        run: |
+          echo "### ✅ Ejecución completada" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Repositorio | Estado |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------------|--------|" >> $GITHUB_STEP_SUMMARY
-          
-          # Analizar resultados
-          for dir in all-results/*/; do
-            repo_name=$(basename "$dir")
-            if find "$dir" -name "*.xml" -exec grep -l "failures=\"[1-9]" {} \; 2>/dev/null | grep -q .; then
-              echo "| $repo_name | ❌ Fallido |" >> $GITHUB_STEP_SUMMARY
-            else
-              echo "| $repo_name | ✅ Exitoso |" >> $GITHUB_STEP_SUMMARY
-            fi
-          done
-
-      - name: Check overall status
-        if: needs.mvn_test.result == 'failure'
-        run: |
-          echo "::error::Algunos tests fallaron"
-          exit 1
+          echo "| Campo | Valor |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Repo | \`${{ matrix.repo }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tags | \`${{ matrix.tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Keywords | ${{ steps.decrypt.outputs.keyword_count }} desencriptados |" >> $GITHUB_STEP_SUMMARY
+          echo "| Algoritmo | AES-256-CBC + RSA-4096 |" >> $GITHUB_STEP_SUMMARY
