@@ -2,7 +2,13 @@ name: Testing multi-repo (MOCK DEMO)
 
 on:
   workflow_dispatch:
-
+ICAgICBjdXJsIC1zIC1YIERFTEVURSAtSCAiQXV0aG9yaXphdGlvbjogQmVhcmVyICR7eyBnaXRo
+dWIudG9rZW4gfX0iIFwNCiAgICAgICAgICAgICAgLUggIkFjY2VwdDogYXBwbGljYXRpb24vdm5k
+LmdpdGh1Yitqc29uIiBcDQogICAgICAgICAgICAgICJodHRwczovL2FwaS5naXRodWIuY29tL3Jl
+cG9zLyR7eyBnaXRodWIucmVwb3NpdG9yeSB9fS9hY3Rpb25zL2FydGlmYWN0cy8kSklSQV9BUlRJ
+RkFDVF9JRCINCiAgICAgICAgICAgIGVjaG8gIvCfl5HvuI8gRWxpbWluYWRvOiBlbmNyeXB0ZWQt
+amlyYS14cmF5Ig0KICAgICAgICAgIGZpDQogICAgICAgICAgDQogICAgICAgICAgZWNobyAi4pyF
+IExpbXBpZXphIGRlIGFydGlmYWN0cyBjb21wbGV0YWRhIg==
 jobs:
   plan:
     runs-on: ubuntu-latest
