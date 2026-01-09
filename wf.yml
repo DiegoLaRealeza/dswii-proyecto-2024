@@ -4,13 +4,11 @@ import os
 import requests
 import logging
 
-# Configuración del logging profesional
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 
-# Configuración de la base de datos
 PGHOST = os.environ.get('PGHOST')
 PGDATABASE = os.environ.get('PGDATABASE')
 PGUSER = os.environ.get('BD_USERNAME')
@@ -18,24 +16,16 @@ PGPASSWORD = os.environ.get('BD_PASSWORD')
 PGPORT = os.environ.get('PGPORT')
 PGSSLMODE = os.environ.get('PGSSLMODE')
 
-# Variables de entorno para el proceso
 PATGH = os.environ.get('PAT_GENERIC')
 GH_ISSUE_NUMBER = os.environ["GH_ISSUE_NUMBER"]
 CODAPP = os.environ["CODAPP"]
 REPO = os.environ["REPO"]
-
-# ============================================================================
-# CONSTANTES DE ESTADOS
-# ============================================================================
-# Estados CERT: pendiente, listo, cancelado
-# Estados PROD: pendiente, success, failure, cancelado
 
 ESTADOS_ACTIVOS_PROD = ('pendiente', 'failure')
 ESTADOS_FINALIZADOS_PROD = ('success', 'cancelado')
 
 
 def comentar_en_issue(mensaje):
-    """Deja un comentario en el issue de GitHub."""
     url = f"https://api.github.com/repos/{REPO}/issues/{GH_ISSUE_NUMBER}/comments"
     headers = {
         "Authorization": f"Bearer {PATGH}",
@@ -58,14 +48,13 @@ def get_token_for_org(org):
     }
     token = tokens.get(org)
     if token:
-        logging.info(f"Token encontrado para la organización: {org}")
+        logging.info(f"Token encontrado para la organizacion: {org}")
     else:
-        logging.warning(f"No se encontró token para la organización: {org}")
+        logging.warning(f"No se encontro token para la organizacion: {org}")
     return token
 
 
 def get_connection_and_cursor():
-    """Obtiene una conexión y cursor a la base de datos."""
     try:
         conn = psycopg2.connect(
             host=PGHOST,
@@ -77,32 +66,15 @@ def get_connection_and_cursor():
         cur = conn.cursor()
         return conn, cur
     except Exception as e:
-        mensaje = f":x: Error: No se pudo conectar a la base de datos. Detalle: {e}"
+        mensaje = f"Error: No se pudo conectar a la base de datos. Detalle: {e}"
         comentar_en_issue(mensaje)
         logging.error(mensaje)
         exit(1)
 
 
-# ============================================================================
-# REGLA 1: Verificar si el Issue está ABIERTO o CERRADO
-# ============================================================================
 def verificar_issue_abierto(issue_number, codapp):
-    """
-    Verifica si el issue está ABIERTO (tiene al menos un componente activo).
-    
-    ISSUE ABIERTO: Existe al menos 1 componente con status_prod IN (pendiente, failure)
-    ISSUE CERRADO: TODOS los componentes tienen status_prod IN (success, cancelado)
-    
-    REGLA IMPORTANTE:
-    - Si el issue está ABIERTO, TODOS los componentes se pueden modificar (incluso los que tienen success)
-    - Si el issue está CERRADO, NO se puede modificar NADA
-    
-    Returns:
-        tuple: (esta_abierto: bool, mensaje: str, total_componentes: int)
-    """
     conn, cur = get_connection_and_cursor()
     
-    # Contar componentes activos (pendiente o failure)
     cur.execute(
         """
         SELECT COUNT(*) FROM sldc_multijob 
@@ -114,7 +86,6 @@ def verificar_issue_abierto(issue_number, codapp):
     )
     activos = cur.fetchone()[0]
     
-    # Contar total de componentes
     cur.execute(
         """
         SELECT COUNT(*) FROM sldc_multijob 
@@ -126,29 +97,16 @@ def verificar_issue_abierto(issue_number, codapp):
     
     conn.close()
     
-    # Si no hay registros, se considera abierto (nuevo issue)
     if total == 0:
         return True, "Issue nuevo, sin componentes registrados.", 0
     
     if activos > 0:
         return True, f"Issue abierto: {activos} componente(s) activo(s) de {total} total.", total
     else:
-        return False, "Issue cerrado: todos los componentes están finalizados (success o cancelado).", total
+        return False, "Issue cerrado: todos los componentes estan finalizados.", total
 
 
-# ============================================================================
-# REGLA 2: Obtener componentes NO CANCELADOS de la BD (excluyendo solo cancelados)
-# ============================================================================
 def get_db_entries_no_cancelados(issue_number, codapp):
-    """
-    Obtiene los componentes NO CANCELADOS de la BD para comparar con el YAML.
-    
-    REGLA: Si el issue está ABIERTO, todos los componentes (incluyendo success) 
-    son modificables. Solo se excluyen los cancelados.
-    
-    Se excluyen: cancelado/cancelado
-    Se incluyen: pendiente/pendiente, listo/pendiente, listo/failure, listo/success
-    """
     conn, cur = get_connection_and_cursor()
     cur.execute(
         """
@@ -174,7 +132,6 @@ def get_db_entries_no_cancelados(issue_number, codapp):
 
 
 def get_db_entries_todos(issue_number, codapp):
-    """Obtiene TODOS los componentes de la BD para el issue (incluyendo finalizados)."""
     conn, cur = get_connection_and_cursor()
     cur.execute(
         """
@@ -199,21 +156,16 @@ def get_db_entries_todos(issue_number, codapp):
 
 
 def get_yml_entries(yml_path):
-    """Lee el archivo delivery.yml y extrae los componentes y su orden."""
     try:
         with open(yml_path, "r") as f:
             data = yaml.safe_load(f)
     except yaml.YAMLError as e:
-        mensaje = (
-            f":x: Error: El archivo delivery.yml tiene un formato inválido. "
-            "Esto puede deberse a problemas de indentación (espacios o tabs incorrectos) o errores de sintaxis. "
-            f"Detalle: {e}"
-        )
+        mensaje = f"Error: El archivo delivery.yml tiene un formato invalido. Detalle: {e}"
         comentar_en_issue(mensaje)
         logging.error(mensaje)
         exit(1)
     except Exception as e:
-        mensaje = f":x: Error: No se pudo leer el archivo delivery.yml. Detalle: {e}"
+        mensaje = f"Error: No se pudo leer el archivo delivery.yml. Detalle: {e}"
         comentar_en_issue(mensaje)
         logging.error(mensaje)
         exit(1)
@@ -236,16 +188,7 @@ def get_yml_entries(yml_path):
     return entries
 
 
-# ============================================================================
-# REGLA 3: Comparar componentes (excluyendo solo cancelados)
-# ============================================================================
 def comparar_componentes(db_entries_no_cancelados, yml_entries):
-    """
-    Compara los componentes NO CANCELADOS de la BD con el YAML.
-    
-    REGLA: Si el issue está ABIERTO, todos los componentes son comparables
-    (incluyendo los que tienen success). Solo se excluyen los cancelados.
-    """
     db_dict = {(e["org"], e["repo"]): e for e in db_entries_no_cancelados}
     yml_dict = {(e["org"], e["repo"]): e["orden"] for e in yml_entries}
 
@@ -253,13 +196,10 @@ def comparar_componentes(db_entries_no_cancelados, yml_entries):
     to_remove = []
     to_update_order = []
 
-    # Detectar agregados y cambios de orden
     for key, orden in yml_dict.items():
         if key not in db_dict:
-            # Componente nuevo (no existe en BD)
             to_add.append({"org": key[0], "repo": key[1], "orden": orden})
         else:
-            # Existe en BD, verificar si cambió el orden
             db_entry = db_dict[key]
             if int(db_entry["orden"]) != int(orden):
                 to_update_order.append({
@@ -271,7 +211,6 @@ def comparar_componentes(db_entries_no_cancelados, yml_entries):
                     "status_prod": db_entry["status_prod"]
                 })
 
-    # Detectar eliminados (están en BD pero no en YAML)
     for key, entry in db_dict.items():
         if key not in yml_dict:
             to_remove.append({
@@ -285,14 +224,7 @@ def comparar_componentes(db_entries_no_cancelados, yml_entries):
     return to_add, to_remove, to_update_order
 
 
-# ============================================================================
-# REGLA 4: Agregar registros (siempre como pendiente/pendiente)
-# ============================================================================
 def agregar_registros(entries, issue_number, codapp):
-    """
-    Agrega nuevos componentes a la base de datos.
-    Siempre se insertan con status pendiente/pendiente.
-    """
     if not entries:
         return
     conn, cur = get_connection_and_cursor()
@@ -304,10 +236,10 @@ def agregar_registros(entries, issue_number, codapp):
             """,
             (
                 issue_number,
-                '',  # ocd_key por defecto
+                '',
                 entry["org"],
                 entry["repo"],
-                '',  # tag por defecto
+                '',
                 entry["orden"],
                 'pendiente',
                 'pendiente',
@@ -319,16 +251,7 @@ def agregar_registros(entries, issue_number, codapp):
     conn.close()
 
 
-# ============================================================================
-# REGLA 5: Actualizar orden (cualquier componente no cancelado)
-# ============================================================================
 def actualizar_orden(entries, issue_number, codapp):
-    """
-    Actualiza el orden de los componentes existentes en la base de datos.
-    
-    REGLA: Si el issue está ABIERTO, se puede actualizar el orden de CUALQUIER
-    componente (incluyendo los que tienen success).
-    """
     if not entries:
         return
     conn, cur = get_connection_and_cursor()
@@ -347,17 +270,7 @@ def actualizar_orden(entries, issue_number, codapp):
     conn.close()
 
 
-# ============================================================================
-# REGLA 6: Cancelar componentes (siempre cancelado/cancelado)
-# ============================================================================
 def cancelar_componentes(entries, issue_number, codapp):
-    """
-    Realiza la cancelación de componentes en la base de datos.
-    
-    REGLA: Si el issue está ABIERTO, CUALQUIER componente se puede cancelar
-    (incluyendo los que tienen success). Siempre se actualizan AMBOS estados
-    a cancelado/cancelado.
-    """
     if not entries:
         return
     conn, cur = get_connection_and_cursor()
@@ -371,53 +284,45 @@ def cancelar_componentes(entries, issue_number, codapp):
             """,
             (issue_number, codapp, entry["org"], entry["repo"])
         )
-        logging.info(f"Cancelado: {entry['org']}/{entry['repo']} (estado anterior: {entry['status_cert']}/{entry['status_prod']})")
+        logging.info(f"Cancelado: {entry['org']}/{entry['repo']}")
     conn.commit()
     conn.close()
 
 
-# ============================================================================
-# VALIDACIONES
-# ============================================================================
 def validar_orden(entries):
-    """Valida que los órdenes sean enteros positivos y correlativos desde 1."""
     ordenes = [e["orden"] for e in entries]
     if not all(isinstance(o, int) and o > 0 for o in ordenes):
-        mensaje = ":x: Error: Todos los valores de 'orden' deben ser enteros positivos."
+        mensaje = "Error: Todos los valores de 'orden' deben ser enteros positivos."
         comentar_en_issue(mensaje)
         logging.error(mensaje)
         exit(1)
     ordenes_sorted = sorted(ordenes)
     if ordenes_sorted != list(range(1, len(ordenes_sorted) + 1)):
-        mensaje = ":x: Error: Los valores de 'orden' deben ser correlativos y comenzar desde 1."
+        mensaje = "Error: Los valores de 'orden' deben ser correlativos y comenzar desde 1."
         comentar_en_issue(mensaje)
         logging.error(mensaje)
         exit(1)
 
 
 def validar_estructura_yml(data):
-    """Valida la estructura del archivo delivery.yml."""
     if "repos" not in data or not isinstance(data["repos"], list):
-        mensaje = ":x: Error: El archivo delivery.yml no cumple con el formato esperado. Falta la clave 'repos' o no es una lista."
+        mensaje = "Error: El archivo delivery.yml no cumple con el formato esperado. Falta la clave 'repos' o no es una lista."
         comentar_en_issue(mensaje)
         logging.error(mensaje)
         exit(1)
     for idx, repo in enumerate(data["repos"], 1):
         if "name" not in repo:
-            mensaje = f":x: Error: El archivo delivery.yml no cumple con el formato esperado. Falta el campo 'name' en el repositorio #{idx}."
+            mensaje = f"Error: Falta el campo 'name' en el repositorio #{idx}."
             comentar_en_issue(mensaje)
             logging.error(mensaje)
             exit(1)
         if "params" not in repo or not isinstance(repo["params"], list):
-            mensaje = f":x: Error: El archivo delivery.yml no cumple con el formato esperado. Falta la lista 'params' en el repositorio #{idx} ({repo.get('name','sin nombre')})."
+            mensaje = f"Error: Falta la lista 'params' en el repositorio #{idx} ({repo.get('name','sin nombre')})."
             comentar_en_issue(mensaje)
             logging.error(mensaje)
             exit(1)
         if "wait" not in repo:
-            mensaje = (
-                f":x: Error: El archivo delivery.yml no cumple con el formato esperado. Falta el campo 'wait' en el repositorio #{idx} ({repo['name']}). "
-                "Si el campo existe pero no es detectado, revisa la indentación y asegúrate de no usar tabs o espacios incorrectos."
-            )
+            mensaje = f"Error: Falta el campo 'wait' en el repositorio #{idx} ({repo['name']})."
             comentar_en_issue(mensaje)
             logging.error(mensaje)
             exit(1)
@@ -426,20 +331,19 @@ def validar_estructura_yml(data):
             if "orden" in param:
                 orden_encontrado = True
         if not orden_encontrado:
-            mensaje = f":x: Error: El archivo delivery.yml no cumple con el formato esperado. Falta el campo 'orden' en 'params' del repositorio #{idx} ({repo['name']})."
+            mensaje = f"Error: Falta el campo 'orden' en 'params' del repositorio #{idx} ({repo['name']})."
             comentar_en_issue(mensaje)
             logging.error(mensaje)
             exit(1)
 
 
 def validar_existencia_repos(yml_entries):
-    """Valida que los repositorios existan en GitHub."""
     for entry in yml_entries:
         org = entry["org"]
         repo = entry["repo"]
         token = get_token_for_org(org)
         if not token:
-            mensaje = f":x: No se encontró token para la organización '{org}'. No se puede validar la existencia del repositorio '{org}/{repo}'."
+            mensaje = f"Error: No se encontro token para la organizacion '{org}'."
             comentar_en_issue(mensaje)
             logging.error(mensaje)
             exit(1)
@@ -447,7 +351,7 @@ def validar_existencia_repos(yml_entries):
         headers = {"Authorization": f"Bearer {token}"}
         response = requests.get(url, headers=headers)
         if response.status_code != 200:
-            mensaje = f":x: El repositorio '{org}/{repo}' no existe o no es accesible en GitHub (status {response.status_code})."
+            mensaje = f"Error: El repositorio '{org}/{repo}' no existe o no es accesible en GitHub."
             comentar_en_issue(mensaje)
             logging.error(mensaje)
             exit(1)
@@ -455,12 +359,11 @@ def validar_existencia_repos(yml_entries):
 
 
 def validar_duplicados_yaml(yml_entries):
-    """Valida que no haya repositorios duplicados en el YAML."""
     vistos = set()
     for entry in yml_entries:
         clave = (entry["org"], entry["repo"])
         if clave in vistos:
-            mensaje = f":x: El repositorio '{entry['org']}/{entry['repo']}' está duplicado en el archivo delivery.yml."
+            mensaje = f"Error: El repositorio '{entry['org']}/{entry['repo']}' esta duplicado en el archivo delivery.yml."
             comentar_en_issue(mensaje)
             logging.error(mensaje)
             exit(1)
@@ -468,16 +371,7 @@ def validar_duplicados_yaml(yml_entries):
     logging.info("No se encontraron duplicados en el YAML.")
 
 
-# ============================================================================
-# REGLA 7: Validar duplicados globales (solo componentes ACTIVOS en otros issues)
-# ============================================================================
 def validar_duplicados_globales(yml_entries, issue_number, codapp):
-    """
-    Valida que los repositorios no estén ACTIVOS en otro issue.
-    
-    Estados ACTIVOS que bloquean: pendiente/pendiente, listo/pendiente, listo/failure
-    Estados que NO bloquean: listo/success, cancelado/cancelado
-    """
     conn, cur = get_connection_and_cursor()
     for entry in yml_entries:
         cur.execute(
@@ -495,62 +389,105 @@ def validar_duplicados_globales(yml_entries, issue_number, codapp):
         if result:
             estado_info = f"{result[2]}/{result[3]}"
             mensaje = (
-                f":x: El repositorio '{entry['org']}/{entry['repo']}' ya está activo en otro issue "
-                f"(issue: {result[0]}, cod_app: {result[1]}, estado: {estado_info}). "
-                "No se permiten duplicados globales en estado activo."
+                f"Error: El repositorio '{entry['org']}/{entry['repo']}' ya esta activo en otro issue "
+                f"(issue: {result[0]}, cod_app: {result[1]}, estado: {estado_info})."
             )
             comentar_en_issue(mensaje)
             logging.error(mensaje)
             conn.close()
             exit(1)
     conn.close()
-    logging.info("No se encontraron duplicados globales activos en la base de datos.")
+    logging.info("No se encontraron duplicados globales activos.")
 
 
-# ============================================================================
-# FUNCIÓN PRINCIPAL
-# ============================================================================
+def generar_tabla_estado_anterior(db_entries):
+    if not db_entries:
+        return "| Organizacion | Repositorio | Orden | Estado CERT | Estado PROD |\n|--------------|-------------|-------|-------------|-------------|\n| (sin registros) | - | - | - | - |"
+    
+    lineas = ["| Organizacion | Repositorio | Orden | Estado CERT | Estado PROD |"]
+    lineas.append("|--------------|-------------|-------|-------------|-------------|")
+    for entry in db_entries:
+        lineas.append(f"| {entry['org']} | {entry['repo']} | {entry['orden']} | {entry['status_cert']} | {entry['status_prod']} |")
+    return "\n".join(lineas)
+
+
+def generar_tabla_estado_actual(yml_entries, to_add, to_remove, to_update_order, db_entries):
+    db_dict = {(e["org"], e["repo"]): e for e in db_entries}
+    remove_set = {(e["org"], e["repo"]) for e in to_remove}
+    update_dict = {(e["org"], e["repo"]): e for e in to_update_order}
+    
+    lineas = ["| Organizacion | Repositorio | Orden | Estado CERT | Estado PROD | Accion |"]
+    lineas.append("|--------------|-------------|-------|-------------|-------------|--------|")
+    
+    for entry in yml_entries:
+        key = (entry["org"], entry["repo"])
+        if key in [(e["org"], e["repo"]) for e in to_add]:
+            lineas.append(f"| {entry['org']} | {entry['repo']} | {entry['orden']} | pendiente | pendiente | AGREGADO |")
+        elif key in update_dict:
+            db_entry = db_dict.get(key, {})
+            lineas.append(f"| {entry['org']} | {entry['repo']} | {entry['orden']} | {db_entry.get('status_cert', '-')} | {db_entry.get('status_prod', '-')} | ORDEN ACTUALIZADO |")
+        else:
+            db_entry = db_dict.get(key, {})
+            lineas.append(f"| {entry['org']} | {entry['repo']} | {entry['orden']} | {db_entry.get('status_cert', '-')} | {db_entry.get('status_prod', '-')} | SIN CAMBIOS |")
+    
+    for entry in to_remove:
+        lineas.append(f"| {entry['org']} | {entry['repo']} | {entry['orden']} | cancelado | cancelado | CANCELADO |")
+    
+    return "\n".join(lineas)
+
+
+def generar_resumen_cambios(to_add, to_remove, to_update_order):
+    lineas = []
+    
+    if to_add:
+        lineas.append("**Componentes agregados:**")
+        for e in to_add:
+            lineas.append(f"  - {e['org']}/{e['repo']} (orden: {e['orden']})")
+    
+    if to_update_order:
+        lineas.append("**Ordenes actualizados:**")
+        for e in to_update_order:
+            lineas.append(f"  - {e['org']}/{e['repo']} (orden: {e['orden_actual']} -> {e['orden_nueva']})")
+    
+    if to_remove:
+        lineas.append("**Componentes cancelados:**")
+        for e in to_remove:
+            lineas.append(f"  - {e['org']}/{e['repo']} (estado anterior: {e['status_cert']}/{e['status_prod']})")
+    
+    return "\n".join(lineas)
+
+
 def main():
     logging.info("=" * 60)
-    logging.info("INICIO DE SINCRONIZACIÓN DE COMPONENTES")
+    logging.info("INICIO DE SINCRONIZACION DE COMPONENTES")
     logging.info("=" * 60)
     logging.info(f"Issue: {GH_ISSUE_NUMBER}, CodApp: {CODAPP}")
     
-    # PASO 1: Verificar si el issue está abierto
     issue_abierto, mensaje_estado, total_componentes = verificar_issue_abierto(GH_ISSUE_NUMBER, CODAPP)
     logging.info(mensaje_estado)
     
-    # Leer el YAML
     yml_entries = get_yml_entries("deployGo/delivery.yml")
     logging.info(f"Componentes en YAML: {len(yml_entries)}")
     
-    # Si el issue está CERRADO y hay componentes, rechazar cualquier cambio
     if not issue_abierto and total_componentes > 0:
         mensaje = (
-            ":x: **Issue Cerrado**\n\n"
-            "Este issue ya está cerrado (todos los componentes están en estado `success` o `cancelado`).\n"
-            "No se permiten modificaciones (agregar, eliminar o cambiar orden).\n\n"
+            "**Error: Issue Cerrado**\n\n"
+            "Este issue ya esta cerrado (todos los componentes estan en estado success o cancelado).\n"
+            "No se permiten modificaciones.\n\n"
             "Si necesitas hacer cambios, crea un nuevo issue."
         )
         comentar_en_issue(mensaje)
         logging.error("Issue cerrado. No se permiten modificaciones.")
         exit(1)
     
-    # PASO 2: Validaciones del YAML
     validar_duplicados_yaml(yml_entries)
     validar_orden(yml_entries)
-    
-    # PASO 3: Validar duplicados globales
     validar_duplicados_globales(yml_entries, GH_ISSUE_NUMBER, CODAPP)
-    
-    # PASO 4: Validar existencia de repositorios en GitHub
     validar_existencia_repos(yml_entries)
     
-    # PASO 5: Obtener componentes NO CANCELADOS de la BD
     db_entries_no_cancelados = get_db_entries_no_cancelados(GH_ISSUE_NUMBER, CODAPP)
     logging.info(f"Componentes no cancelados en BD: {len(db_entries_no_cancelados)}")
     
-    # PASO 6: Comparar YAML vs BD (excluyendo solo cancelados)
     to_add, to_remove, to_update_order = comparar_componentes(db_entries_no_cancelados, yml_entries)
 
     logging.info("-" * 40)
@@ -559,39 +496,272 @@ def main():
     logging.info(f"Para actualizar orden: {len(to_update_order)} componente(s)")
     logging.info("-" * 40)
 
-    # PASO 7: Ejecutar acciones
-    resumen = []
+    if not to_add and not to_remove and not to_update_order:
+        logging.info("No se detectaron cambios.")
+        comentar_en_issue("No se detectaron cambios. El archivo delivery.yml coincide con los registros en la base de datos.")
+        logging.info("SINCRONIZACION FINALIZADA")
+        return
+
+    tabla_antes = generar_tabla_estado_anterior(db_entries_no_cancelados)
     
     if to_add:
         agregar_registros(to_add, GH_ISSUE_NUMBER, CODAPP)
         logging.info("Registros agregados correctamente.")
-        repos_agregados = [f"`{e['org']}/{e['repo']}` (orden: {e['orden']})" for e in to_add]
-        resumen.append(f"**➕ Componentes agregados ({len(to_add)}):**\n" + "\n".join(f"  - {r}" for r in repos_agregados))
 
     if to_update_order:
         actualizar_orden(to_update_order, GH_ISSUE_NUMBER, CODAPP)
-        logging.info("Órdenes actualizados correctamente.")
-        repos_orden = [f"`{e['org']}/{e['repo']}` (orden: {e['orden_actual']} → {e['orden_nueva']})" for e in to_update_order]
-        resumen.append(f"**🔄 Órdenes actualizados ({len(to_update_order)}):**\n" + "\n".join(f"  - {r}" for r in repos_orden))
+        logging.info("Ordenes actualizados correctamente.")
 
     if to_remove:
         cancelar_componentes(to_remove, GH_ISSUE_NUMBER, CODAPP)
         logging.info("Componentes cancelados correctamente.")
-        repos_cancelados = [f"`{e['org']}/{e['repo']}` (estado anterior: {e['status_cert']}/{e['status_prod']})" for e in to_remove]
-        resumen.append(f"**❌ Componentes cancelados ({len(to_remove)}):**\n" + "\n".join(f"  - {r}" for r in repos_cancelados))
 
-    # PASO 8: Comentar resumen en el issue
-    if resumen:
-        mensaje_resumen = ":white_check_mark: **Sincronización completada**\n\n" + "\n\n".join(resumen)
-        comentar_en_issue(mensaje_resumen)
-    else:
-        logging.info("No se detectaron cambios. El YAML coincide con la BD.")
-        comentar_en_issue(":information_source: No se detectaron cambios. El archivo `delivery.yml` coincide con los registros activos en la base de datos.")
+    tabla_despues = generar_tabla_estado_actual(yml_entries, to_add, to_remove, to_update_order, db_entries_no_cancelados)
+    resumen_cambios = generar_resumen_cambios(to_add, to_remove, to_update_order)
+
+    mensaje_final = f"""**Sincronizacion de componentes completada**
+
+**Estado anterior:**
+{tabla_antes}
+
+**Estado actual:**
+{tabla_despues}
+
+**Resumen de cambios:**
+{resumen_cambios}
+"""
+    
+    comentar_en_issue(mensaje_final)
 
     logging.info("=" * 60)
-    logging.info("SINCRONIZACIÓN FINALIZADA")
+    logging.info("SINCRONIZACION FINALIZADA")
     logging.info("=" * 60)
 
 
 if __name__ == "__main__":
     main()
+
+
+
+    #######################################
+================================================================================
+CRITERIOS DE ACEPTACION - HU SINCRONIZACION DE COMPONENTES
+================================================================================
+
+
+================================================================================
+CRITERIOS BASICOS
+================================================================================
+
+--------------------------------------------------------------------------------
+Criterio de aceptacion 1: Agregar componentes
+--------------------------------------------------------------------------------
+
+Dado que el archivo delivery.yml tiene los componentes a desplegar
+Y se necesita agregar mas componentes
+Cuando se actualiza el archivo delivery.yml con los nuevos componentes
+Y se hace el push con los cambios
+Entonces se ejecuta el workflow "DeployGo - Multicomponente - Actualizar componentes"
+Y los nuevos componentes se agregan en la base de datos con estado "pendiente/pendiente"
+Y en el issue de GitHub se comenta el mensaje:
+
+    "Sincronizacion de componentes completada
+
+    Estado anterior:
+    | Organizacion | Repositorio | Orden | Estado CERT | Estado PROD |
+    |--------------|-------------|-------|-------------|-------------|
+    | BCP-Sandbox  | repo-A      | 1     | pendiente   | pendiente   |
+    | BCP-Sandbox  | repo-B      | 2     | pendiente   | pendiente   |
+
+    Estado actual:
+    | Organizacion | Repositorio | Orden | Estado CERT | Estado PROD | Accion   |
+    |--------------|-------------|-------|-------------|-------------|----------|
+    | BCP-Sandbox  | repo-A      | 1     | pendiente   | pendiente   | SIN CAMBIOS |
+    | BCP-Sandbox  | repo-B      | 2     | pendiente   | pendiente   | SIN CAMBIOS |
+    | BCP-Sandbox  | repo-C      | 3     | pendiente   | pendiente   | AGREGADO |
+
+    Resumen de cambios:
+    Componentes agregados:
+      - BCP-Sandbox/repo-C (orden: 3)"
+
+--------------------------------------------------------------------------------
+Criterio de aceptacion 2: Eliminar componentes
+--------------------------------------------------------------------------------
+
+Dado que el archivo delivery.yml contiene los componentes a desplegar
+Y se necesita eliminar uno o mas componentes
+Cuando se actualiza el archivo delivery.yml eliminando los componentes
+Y se hace el push con los cambios
+Entonces se ejecuta el workflow "DeployGo - Multicomponente - Actualizar componentes"
+Y los componentes eliminados se marcan como "cancelado/cancelado" en la base de datos
+Y en el issue de GitHub se comenta el mensaje:
+
+    "Sincronizacion de componentes completada
+
+    Estado anterior:
+    | Organizacion | Repositorio | Orden | Estado CERT | Estado PROD |
+    |--------------|-------------|-------|-------------|-------------|
+    | BCP-Sandbox  | repo-A      | 1     | pendiente   | pendiente   |
+    | BCP-Sandbox  | repo-B      | 2     | pendiente   | pendiente   |
+    | BCP-Sandbox  | repo-C      | 3     | pendiente   | pendiente   |
+
+    Estado actual:
+    | Organizacion | Repositorio | Orden | Estado CERT | Estado PROD | Accion    |
+    |--------------|-------------|-------|-------------|-------------|-----------|
+    | BCP-Sandbox  | repo-A      | 1     | pendiente   | pendiente   | SIN CAMBIOS |
+    | BCP-Sandbox  | repo-B      | 2     | pendiente   | pendiente   | SIN CAMBIOS |
+    | BCP-Sandbox  | repo-C      | 3     | cancelado   | cancelado   | CANCELADO |
+
+    Resumen de cambios:
+    Componentes cancelados:
+      - BCP-Sandbox/repo-C (estado anterior: pendiente/pendiente)"
+
+--------------------------------------------------------------------------------
+Criterio de aceptacion 3: Cambiar nombre de componente
+--------------------------------------------------------------------------------
+
+Dado que el archivo delivery.yml contiene los componentes a desplegar
+Y se necesita cambiar el nombre de un componente existente
+Cuando se actualiza el archivo delivery.yml cambiando el nombre del componente
+Y se hace el push con los cambios
+Entonces se ejecuta el workflow "DeployGo - Multicomponente - Actualizar componentes"
+Y el componente con el nombre anterior se marca como "cancelado/cancelado" en la base de datos
+Y el componente con el nuevo nombre se agrega como "pendiente/pendiente" en la base de datos
+Y en el issue de GitHub se comenta el mensaje:
+
+    "Sincronizacion de componentes completada
+
+    Estado anterior:
+    | Organizacion | Repositorio | Orden | Estado CERT | Estado PROD |
+    |--------------|-------------|-------|-------------|-------------|
+    | BCP-Sandbox  | repo-A      | 1     | pendiente   | pendiente   |
+    | BCP-Sandbox  | repo-B      | 2     | listo       | pendiente   |
+
+    Estado actual:
+    | Organizacion | Repositorio | Orden | Estado CERT | Estado PROD | Accion    |
+    |--------------|-------------|-------|-------------|-------------|-----------|
+    | BCP-Sandbox  | repo-A      | 1     | pendiente   | pendiente   | SIN CAMBIOS |
+    | BCP-Sandbox  | repo-C      | 2     | pendiente   | pendiente   | AGREGADO  |
+    | BCP-Sandbox  | repo-B      | 2     | cancelado   | cancelado   | CANCELADO |
+
+    Resumen de cambios:
+    Componentes agregados:
+      - BCP-Sandbox/repo-C (orden: 2)
+    Componentes cancelados:
+      - BCP-Sandbox/repo-B (estado anterior: listo/pendiente)"
+
+--------------------------------------------------------------------------------
+Criterio de aceptacion 4: Modificar orden de componentes
+--------------------------------------------------------------------------------
+
+Dado que el archivo delivery.yml contiene los componentes a desplegar
+Y se necesita modificar el orden de despliegue de uno o mas componentes
+Cuando se actualiza el archivo delivery.yml cambiando el valor de orden de los componentes
+Y se hace el push con los cambios
+Entonces se ejecuta el workflow "DeployGo - Multicomponente - Actualizar componentes"
+Y el orden de los componentes se actualiza en la base de datos segun lo definido en el archivo
+Y en el issue de GitHub se comenta el mensaje:
+
+    "Sincronizacion de componentes completada
+
+    Estado anterior:
+    | Organizacion | Repositorio | Orden | Estado CERT | Estado PROD |
+    |--------------|-------------|-------|-------------|-------------|
+    | BCP-Sandbox  | repo-A      | 1     | pendiente   | pendiente   |
+    | BCP-Sandbox  | repo-B      | 2     | listo       | pendiente   |
+    | BCP-Sandbox  | repo-C      | 3     | pendiente   | pendiente   |
+
+    Estado actual:
+    | Organizacion | Repositorio | Orden | Estado CERT | Estado PROD | Accion            |
+    |--------------|-------------|-------|-------------|-------------|-------------------|
+    | BCP-Sandbox  | repo-A      | 2     | pendiente   | pendiente   | ORDEN ACTUALIZADO |
+    | BCP-Sandbox  | repo-B      | 1     | listo       | pendiente   | ORDEN ACTUALIZADO |
+    | BCP-Sandbox  | repo-C      | 3     | pendiente   | pendiente   | SIN CAMBIOS       |
+
+    Resumen de cambios:
+    Ordenes actualizados:
+      - BCP-Sandbox/repo-A (orden: 1 -> 2)
+      - BCP-Sandbox/repo-B (orden: 2 -> 1)"
+
+
+================================================================================
+CRITERIOS DE VALIDACION
+================================================================================
+
+--------------------------------------------------------------------------------
+Criterio de aceptacion 5: Issue cerrado no permite modificaciones
+--------------------------------------------------------------------------------
+
+Dado que el archivo delivery.yml contiene componentes a desplegar
+Y todos los componentes registrados en la base de datos tienen estado finalizado
+  (todos en "listo/success" o "cancelado/cancelado" o combinacion de ambos)
+Cuando se actualiza el archivo delivery.yml con cualquier cambio
+Y se hace el push con los cambios
+Entonces se ejecuta el workflow "DeployGo - Multicomponente - Actualizar componentes"
+Y el proceso rechaza los cambios
+Y en el issue de GitHub se comenta el mensaje:
+
+    "Error: Issue Cerrado
+
+    Este issue ya esta cerrado (todos los componentes estan en estado success o cancelado).
+    No se permiten modificaciones.
+
+    Si necesitas hacer cambios, crea un nuevo issue."
+
+--------------------------------------------------------------------------------
+Criterio de aceptacion 6: Duplicado activo en otro issue
+--------------------------------------------------------------------------------
+
+Dado que el archivo delivery.yml contiene un componente a desplegar
+Y ese componente ya esta registrado en otro issue con estado activo
+  (estado "pendiente" o "failure" en produccion)
+Cuando se hace el push con los cambios
+Entonces se ejecuta el workflow "DeployGo - Multicomponente - Actualizar componentes"
+Y el proceso rechaza los cambios
+Y en el issue de GitHub se comenta el mensaje:
+
+    "Error: El repositorio 'BCP-Sandbox/repo-A' ya esta activo en otro issue
+    (issue: 123, cod_app: APP001, estado: listo/pendiente)."
+
+--------------------------------------------------------------------------------
+Criterio de aceptacion 7: Sin cambios detectados
+--------------------------------------------------------------------------------
+
+Dado que el archivo delivery.yml contiene componentes a desplegar
+Y el contenido del archivo coincide exactamente con los registros en la base de datos
+Cuando se hace el push sin cambios reales
+Entonces se ejecuta el workflow "DeployGo - Multicomponente - Actualizar componentes"
+Y no se realizan cambios en la base de datos
+Y en el issue de GitHub se comenta el mensaje:
+
+    "No se detectaron cambios. El archivo delivery.yml coincide con los registros en la base de datos."
+
+
+================================================================================
+RESUMEN DE CRITERIOS
+================================================================================
+
+Categoria                    | Cantidad | Numeros
+-----------------------------|----------|------------------
+Basicos                      | 4        | 1, 2, 3, 4
+Validacion                   | 3        | 5, 6, 7
+-----------------------------|----------|------------------
+TOTAL                        | 7        |
+
+
+================================================================================
+REGLAS DE NEGOCIO APLICADAS
+================================================================================
+
+1. ISSUE ABIERTO: Existe al menos 1 componente con status_prod IN (pendiente, failure)
+   - Todos los componentes son modificables (incluyendo los que tienen success)
+
+2. ISSUE CERRADO: Todos los componentes tienen status_prod IN (success, cancelado)
+   - No se permite ninguna modificacion
+
+3. CANCELACION: Siempre se actualiza a cancelado/cancelado (ambos estados)
+
+4. DUPLICADOS GLOBALES: Solo bloquean los componentes activos en otros issues
+   - Componentes con success o cancelado en otros issues NO bloquean
+
+5. RE-AGREGAR: Un componente cancelado puede re-agregarse creando un nuevo registro
