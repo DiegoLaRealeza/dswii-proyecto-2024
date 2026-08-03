@@ -1,134 +1,295 @@
-name: Testing multi-repo (MOCK DEMO)
+name: Validar Aprobadores de PR
 
 on:
-  workflow_dispatch:
+  pull_request:
+    branches: [master]
+    types: [opened, reopened, synchronize, review_submitted]
+
+env:
+  DEFAULT_TEAM: "my-team"
+  DISPATCH_REPO: "target-repo"
+  DISPATCH_ORG: "owner"
+  ORG_NAME: ${{ github.repository_owner }}
+  REPO_NAME: ${{ github.event.repository.name }}
+  PR_NUMBER: ${{ github.event.pull_request.number }}
+  PR_SHA: ${{ github.event.pull_request.head.sha }}
+  PR_TITLE: ${{ github.event.pull_request.title }}
 
 jobs:
-  plan:
+  validar-aprobadores:
+    name: Validar aprobadores del equipo
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.build.outputs.matrix }}
+      valid_count: ${{ steps.check.outputs.valid_count }}
+      checks_status: ${{ steps.checks.outputs.status }}
     steps:
-      - name: Checkout (para leer config.yml)
-        uses: actions/checkout@v4
-      - name: Install yq v4.x
-        run: |
-          sudo wget https://github.com/mikefarah/yq/releases/download/v4.43.1/yq_linux_amd64 -O /usr/bin/yq
-          sudo chmod +x /usr/bin/yq
-      # PASO EXTRA: Crear delivery.yml dummy por si no existe en el repo para la demo
-      - name: Crear delivery.yml dummy (Solo para Demo)
-        run: |
-          cat <<EOF > delivery.yml
-          testing:
-            - repo: org/repo-demo-1
-              tags: "@login"
-              navegar: chrome
-              karate: true
-            - repo: org/repo-demo-2
-              tags: "@payment"
-              navegar: firefox
-              karate: false
-          EOF
-
-      - id: build
-        name: Build matrix and Mock Repos
+      - name: Verificar que los aprobadores pertenecen al equipo
+        id: check
         env:
-          GH_TOKEN: "MOCK_TOKEN" # No necesitamos token real
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TEAM_SLUG: ${{ inputs.team_slug || env.DEFAULT_TEAM }}
         run: |
-          CONFIG_FILE="delivery.yml"
+          set -euo pipefail
 
-          # 1. Generar el JSON de la matriz
-          # CORRECCIÓN: Agregamos comillas a las claves ("repo", "ref", etc.)
-          matrix_json="$(yq -o=json '
-            .testing
-            | map({
-                "repo": .repo,
-                "ref": (.ref // "main"),
-                "tags": .tags,
-                "navegar": .navegar,
-                "karate": (.karate // false),
-                "slug": (.repo | split("/") | .[1])
-              })
-          ' "$CONFIG_FILE")"
+          echo "Iniciando validacion de aprobadores..."
+          echo "Repositorio: $ORG_NAME/$REPO_NAME"
+          echo "PR: #$PR_NUMBER"
+          echo "Equipo requerido: $TEAM_SLUG"
 
-          # 2. Exportar matriz al output
-          {
-            echo "matrix<<EOF"
-            echo "$matrix_json"
-            echo "EOF"
-          } >> "$GITHUB_OUTPUT"
+          APPROVERS=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$ORG_NAME/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
+            | jq -r '[.[] | select(.state == "APPROVED") | .user.login] | unique | .[]')
 
-          # 3. MOCK: Simular clonado de repositorios
-          mkdir -p repos_downloaded
+          if [ -z "$APPROVERS" ]; then
+            echo "No se encontraron aprobaciones en este PR"
+            echo "valid_count=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
-          echo "$matrix_json" | jq -c '.[]' | while read -r item; do
-            REPO=$(echo "$item" | jq -r '.repo')
-            REF=$(echo "$item" | jq -r '.ref')
-            SLUG=$(echo "$item" | jq -r '.slug')
-            
-            echo "--- [MOCK] Simulando git clone de $REPO ---"
-            
-            # En lugar de git clone, creamos la carpeta y un script falso
-            TARGET_DIR="repos_downloaded/$SLUG"
-            mkdir -p "$TARGET_DIR"
-            
-            # Creamos un archivo dummy para verificar que el artifact funciona
-            echo "Este es el código fuente simulado de $REPO" > "$TARGET_DIR/README.md"
-            
-            # Creamos un script ejecutable simulado
-            SCRIPT_PATH="$TARGET_DIR/run_tests.sh"
-            echo '#!/bin/bash' > "$SCRIPT_PATH"
-            echo 'echo "  [MOCK TEST] Ejecutando tests en repo: '$SLUG'"' >> "$SCRIPT_PATH"
-            echo 'echo "  [MOCK TEST] Tags aplicados: $TAGS"' >> "$SCRIPT_PATH"
-            echo 'echo "  [MOCK TEST] Navegador: $NAVEGAR"' >> "$SCRIPT_PATH"
-            chmod +x "$SCRIPT_PATH"
-            
+          echo "Aprobadores encontrados:"
+          echo "$APPROVERS"
+
+          VALID_COUNT=0
+          VALID_APPROVERS=""
+
+          for user in $APPROVERS; do
+            echo "Verificando membresia de: $user"
+
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+              -H "Authorization: token $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/orgs/$ORG_NAME/teams/$TEAM_SLUG/members/$user")
+
+            if [ "$HTTP_CODE" = "204" ]; then
+              echo "  -> $user ES miembro del equipo"
+              VALID_COUNT=$((VALID_COUNT + 1))
+              VALID_APPROVERS="$VALID_APPROVERS $user"
+            else
+              echo "  -> $user NO es miembro del equipo (HTTP: $HTTP_CODE)"
+            fi
           done
 
-      - name: Subir repositorios simulados como Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: repos-source
-          path: repos_downloaded
-          retention-days: 1
+          echo "---"
+          echo "Total aprobadores validos: $VALID_COUNT"
+          echo "Aprobadores validos:$VALID_APPROVERS"
+          echo "valid_count=$VALID_COUNT" >> "$GITHUB_OUTPUT"
+          echo "valid_approvers=$VALID_APPROVERS" >> "$GITHUB_OUTPUT"
 
-  run:
-    runs-on: ubuntu-latest
-    needs: plan
-
-    strategy:
-      fail-fast: false
-      matrix:
-        include: ${{ fromJson(needs.plan.outputs.matrix) }}
-
-    defaults:
-      run:
-        working-directory: repos_downloaded/${{ matrix.slug }}
-
-    steps:
-      - name: Descargar repositorios (Artifact)
-        uses: actions/download-artifact@v4
-        with:
-          name: repos-source
-          path: repos_downloaded
-
-      - name: Ejecutar lógica simulada
+      - name: Validar estado de los checks del commit
+        id: checks
         env:
-          TAGS: ${{ matrix.tags }}
-          NAVEGAR: ${{ matrix.navegar }}
-          KARATE: ${{ matrix.karate }}
-          REPO: ${{ matrix.repo }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          echo "=== INICIANDO JOB PARA $REPO ==="
-          echo "Directorio actual: $(pwd)"
-          ls -la 
+          set -euo pipefail
 
-          # Ejecutamos el script que creamos en el paso anterior
-          if [ -f "./run_tests.sh" ]; then
-            # CORRECCIÓN: Asegurar permisos de ejecución tras descargar el artifact
-            chmod +x ./run_tests.sh
-            ./run_tests.sh
+          echo "Validando checks del commit: $PR_SHA"
+
+          CHECKS_RESPONSE=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$ORG_NAME/$REPO_NAME/commits/$PR_SHA/check-runs")
+
+          TOTAL_CHECKS=$(echo "$CHECKS_RESPONSE" | jq '.total_count')
+          COMPLETED_SUCCESS=$(echo "$CHECKS_RESPONSE" | jq '[.check_runs[] | select(.status == "completed" and .conclusion == "success")] | length')
+
+          echo "Total de checks: $TOTAL_CHECKS"
+          echo "Checks completados con exito: $COMPLETED_SUCCESS"
+
+          if [ "$TOTAL_CHECKS" -gt 0 ] && [ "$TOTAL_CHECKS" -eq "$COMPLETED_SUCCESS" ]; then
+            echo "Estado: completo - Todos los checks pasaron"
+            echo "status=completo" >> "$GITHUB_OUTPUT"
           else
-            echo "Error: No se encontró el script de tests simulado"
+            echo "Estado: incompleto - Hay checks pendientes o fallidos"
+            echo "status=incompleto" >> "$GITHUB_OUTPUT"
+          fi
+
+  disparar-dispatch:
+    name: Disparar aprobacion en repositorio externo
+    needs: validar-aprobadores
+    if: ${{ needs.validar-aprobadores.outputs.valid_count >= 3 }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enviar solicitud de aprobacion
+        env:
+          GH_TOKEN: ${{ secrets.PAT_DISPATCH }}
+          CHECKS_STATUS: ${{ needs.validar-aprobadores.outputs.checks_status }}
+        run: |
+          set -euo pipefail
+
+          echo "Preparando repository dispatch..."
+          echo "Destino: $DISPATCH_ORG/$DISPATCH_REPO"
+          echo "PR: #$PR_NUMBER"
+          echo "SHA: $PR_SHA"
+          echo "Estado de checks: $CHECKS_STATUS"
+
+          PAYLOAD=$(cat <<EOF
+          {
+            "event_type": "approve-pr",
+            "client_payload": {
+              "pr_number": "$PR_NUMBER",
+              "pr_sha": "$PR_SHA",
+              "pr_title": "$PR_TITLE",
+              "org_name": "$ORG_NAME",
+              "repo_name": "$REPO_NAME",
+              "checks_status": "$CHECKS_STATUS"
+            }
+          }
+          EOF
+          )
+
+          echo "Payload:"
+          echo "$PAYLOAD" | jq .
+
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -d "$PAYLOAD" \
+            "https://api.github.com/repos/$DISPATCH_ORG/$DISPATCH_REPO/dispatches")
+
+          if [ "$HTTP_CODE" = "204" ]; then
+            echo "Repository dispatch enviado exitosamente"
+          else
+            echo "Error al enviar repository dispatch (HTTP: $HTTP_CODE)"
             exit 1
           fi
+
+# numero 2
+
+name: Aprobar PR Auto-aprobación de PRs con validación de checks
+
+on:
+  repository_dispatch:
+    types: [approve-pr]
+
+env:
+  ORG_NAME: ${{ github.event.client_payload.org_name }}
+  REPO_NAME: ${{ github.event.client_payload.repo_name }}
+  PR_NUMBER: ${{ github.event.client_payload.pr_number }}
+  PR_SHA: ${{ github.event.client_payload.pr_sha }}
+
+jobs:
+  evaluar:
+    name: Evaluar estado de checks
+    runs-on: ubuntu-latest
+    outputs:
+      checks_status: ${{ steps.eval.outputs.checks_status }}
+    steps:
+      - name: Obtener estado de checks del payload
+        id: eval
+        run: |
+          echo "Datos recibidos del dispatch:"
+          echo "  Repositorio: $ORG_NAME/$REPO_NAME"
+          echo "  PR: #$PR_NUMBER"
+          echo "  SHA: $PR_SHA"
+          echo "  Estado de checks: ${{ github.event.client_payload.checks_status }}"
+          echo "checks_status=${{ github.event.client_payload.checks_status }}" >> "$GITHUB_OUTPUT"
+
+  aprobar-pr:
+    name: Aprobar pull request
+    needs: evaluar
+    if: ${{ needs.evaluar.outputs.checks_status == '' || needs.evaluar.outputs.checks_status == 'completo' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enviar aprobacion al pull request
+        env:
+          GH_TOKEN: ${{ secrets.PAT_APPROVE }}
+        run: |
+          set -euo pipefail
+
+          echo "Aprobando PR #$PR_NUMBER en $ORG_NAME/$REPO_NAME"
+          echo "Commit ID: $PR_SHA"
+
+          HTTP_CODE=$(curl -s -o /tmp/response.json -w "%{http_code}" -X POST \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -d "{\"event\": \"APPROVE\", \"commit_id\": \"$PR_SHA\"}" \
+            "https://api.github.com/repos/$ORG_NAME/$REPO_NAME/pulls/$PR_NUMBER/reviews")
+
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "PR aprobado exitosamente"
+          else
+            echo "Error al aprobar PR (HTTP: $HTTP_CODE)"
+            cat /tmp/response.json
+            exit 1
+          fi
+
+  rechazar-incompleto:
+    name: Rechazar PR por checks incompletos
+    needs: evaluar
+    if: ${{ needs.evaluar.outputs.checks_status == 'incompleto' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descartar aprobaciones y cerrar PR
+        env:
+          GH_TOKEN: ${{ secrets.PAT_APPROVE }}
+        run: |
+          set -euo pipefail
+
+          echo "Rechazando PR #$PR_NUMBER por checks incompletos"
+          echo "Repositorio: $ORG_NAME/$REPO_NAME"
+
+          echo "Obteniendo reviews aprobados..."
+          REVIEWS=$(curl -s -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$ORG_NAME/$REPO_NAME/pulls/$PR_NUMBER/reviews" \
+            | jq -r '.[] | select(.state == "APPROVED") | .id')
+
+          if [ -z "$REVIEWS" ]; then
+            echo "No hay reviews aprobados para descartar"
+          else
+            echo "Reviews a descartar: $REVIEWS"
+            for review_id in $REVIEWS; do
+              echo "Descartando review ID: $review_id"
+              curl -s -X PUT \
+                -H "Authorization: token $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                -d '{"message": "Checks incompletos"}' \
+                "https://api.github.com/repos/$ORG_NAME/$REPO_NAME/pulls/$PR_NUMBER/reviews/$review_id/dismissals"
+            done
+            echo "Reviews descartados"
+          fi
+
+          echo "Agregando comentario al PR..."
+          curl -s -X POST \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -d '{"body": "Checks incompletos"}' \
+            "https://api.github.com/repos/$ORG_NAME/$REPO_NAME/issues/$PR_NUMBER/comments"
+
+          echo "Cerrando PR..."
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X PATCH \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -d '{"state": "closed"}' \
+            "https://api.github.com/repos/$ORG_NAME/$REPO_NAME/pulls/$PR_NUMBER")
+
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "PR cerrado exitosamente"
+          else
+            echo "Error al cerrar PR (HTTP: $HTTP_CODE)"
+            exit 1
+          fi
+
+
+# 📦 EPIC: Auto-aprobación de PRs con validación de checks
+# │
+# ├── 📋 STORY: Validar aprobadores del equipo
+# │   ├── Subtask: Obtener reviews del PR
+# │   ├── Subtask: Verificar membresía en equipo
+# │   └── Subtask: Contar aprobadores válidos
+# │
+# ├── 📋 STORY: Validar estado de checks del commit
+# │   ├── Subtask: Consultar check-runs del SHA
+# │   └── Subtask: Determinar si están completos
+# │
+# ├── 📋 STORY: Disparar aprobación externa
+# │   ├── Subtask: Construir payload con estado de checks
+# │   └── Subtask: Enviar repository_dispatch
+# │
+# ├── 📋 STORY: Aprobar PR (checks completos)
+# │   └── Subtask: Enviar review APPROVE con commit_id
+# │
+# └── 📋 STORY: Rechazar PR (checks incompletos)
+#     ├── Subtask: Descartar reviews existentes
+#     ├── Subtask: Comentar motivo
+#     └── Subtask: Cerrar PR
